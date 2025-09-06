@@ -79,6 +79,10 @@ empty object because all fields are default
 ### Extend protos for messaging
 
 - protos for sending messages and creating threads
+```bash
+uv run python -m grpc_tools.protoc -I./protos --python_out=./messenger/generated --grpc_python_out=./messenger/generated ./protos/messaging.proto
+```
+
 - send message and create thread 
 - get messages and threads
 
@@ -226,3 +230,6 @@ messenger.MessagingService/SendMessage
 }
 }
 ```
+
+- stream messages and broadcast messages
+- something iffy here but will come back to it

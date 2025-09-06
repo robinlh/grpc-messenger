@@ -1,4 +1,5 @@
 import logging
+import threading
 from datetime import datetime
 import grpc
 import jwt
@@ -17,6 +18,10 @@ JWT_ALGORITHM = "HS256"
 logger = logging.getLogger(__name__)
 
 class MessagingService(messaging_pb2_grpc.MessagingServiceServicer):
+    def __init__(self):
+        # Thread ID -> list of response iterators for connected clients
+        self.subscribers = {}
+        self.lock = threading.Lock()
 
     def _validate_token(self, token):
         try:
@@ -192,6 +197,9 @@ class MessagingService(messaging_pb2_grpc.MessagingServiceServicer):
             
             db.close()
             
+            # Broadcast to streaming clients
+            self._broadcast_message(request.thread_id, message_proto)
+            
             logger.info(f"SendMessage successful - user_id: {user_id}, thread_id: {request.thread_id}, message_id: {new_message.id}, content_length: {len(request.content)}")
             return messaging_pb2.SendMessageResponse(
                 success=True,
@@ -266,3 +274,120 @@ class MessagingService(messaging_pb2_grpc.MessagingServiceServicer):
                 success=False,
                 message="Internal server error"
             )
+    
+    def _broadcast_message(self, thread_id, message_proto):
+        with self.lock:
+            if thread_id in self.subscribers:
+                response = messaging_pb2.StreamMessageResponse(new_message=message_proto)
+                
+                active_subscribers = []
+                for subscriber in self.subscribers[thread_id]:
+                    try:
+                        subscriber.put(response)
+                        active_subscribers.append(subscriber)
+                    except:
+                        logger.info(f"Removed disconnected subscriber from thread {thread_id}")
+                
+                if active_subscribers:
+                    self.subscribers[thread_id] = active_subscribers
+                else:
+                    del self.subscribers[thread_id]
+                    logger.info(f"No active subscribers left for thread {thread_id}")
+    
+    def StreamMessages(self, request_iterator, context):
+        import queue
+        
+        response_queue = queue.Queue()
+        client_subscriptions = set()  # Track which threads this client is subscribed to
+        
+        def cleanup_client():
+            with self.lock:
+                for thread_id in client_subscriptions:
+                    if thread_id in self.subscribers:
+                        try:
+                            self.subscribers[thread_id].remove(response_queue)
+                            if not self.subscribers[thread_id]:
+                                del self.subscribers[thread_id]
+                        except ValueError:
+                            pass  # Already removed
+        
+        try:
+            def process_requests():
+                try:
+                    for request in request_iterator:
+                        if request.HasField('join'):
+                            # Validate token
+                            user_id = self._validate_token(request.join.token)
+                            if not user_id:
+                                response_queue.put(messaging_pb2.StreamMessageResponse(
+                                    error="Invalid or expired token"
+                                ))
+                                continue
+                            
+                            thread_id = request.join.thread_id
+                            
+                            db = get_db_session()
+                            try:
+                                participant = db.query(ThreadParticipant).filter(
+                                    ThreadParticipant.user_id == user_id,
+                                    ThreadParticipant.thread_id == thread_id
+                                ).first()
+                                
+                                if not participant:
+                                    response_queue.put(messaging_pb2.StreamMessageResponse(
+                                        error="You are not a participant in this thread"
+                                    ))
+                                    continue
+                                
+                                with self.lock:
+                                    if thread_id not in self.subscribers:
+                                        self.subscribers[thread_id] = []
+                                    self.subscribers[thread_id].append(response_queue)
+                                    client_subscriptions.add(thread_id)
+                                
+                                logger.info(f"Client joined thread {thread_id} for streaming - user_id: {user_id}")
+                                
+                            finally:
+                                db.close()
+                        
+                        elif request.HasField('leave'):
+                            thread_id = request.leave.thread_id
+                            
+                            with self.lock:
+                                if thread_id in self.subscribers:
+                                    try:
+                                        self.subscribers[thread_id].remove(response_queue)
+                                        client_subscriptions.discard(thread_id)
+                                        if not self.subscribers[thread_id]:
+                                            del self.subscribers[thread_id]
+                                        logger.info(f"Client left thread {thread_id} streaming")
+                                    except ValueError:
+                                        pass  # Already removed
+                
+                except Exception as e:
+                    logger.error(f"Error processing stream requests: {str(e)}")
+                    response_queue.put(messaging_pb2.StreamMessageResponse(
+                        error="Internal server error"
+                    ))
+            
+            import threading
+            request_thread = threading.Thread(target=process_requests)
+            request_thread.daemon = True
+            request_thread.start()
+            
+            while True:
+                try:
+                    response = response_queue.get(timeout=1)
+                    yield response
+                except queue.Empty:
+                    if context.is_active():
+                        continue
+                    else:
+                        break
+                except Exception as e:
+                    logger.error(f"Error in stream response: {str(e)}")
+                    break
+        
+        finally:
+            cleanup_client()
+            logger.info("StreamMessages connection closed")
