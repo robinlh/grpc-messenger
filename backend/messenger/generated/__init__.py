@@ -11,9 +11,13 @@ if _current_dir not in sys.path:
 try:
     from . import auth_pb2
     from . import auth_pb2_grpc
+    from . import messaging_pb2
+    from . import messaging_pb2_grpc
 except ImportError:
     # Fallback if relative imports don't work
     import auth_pb2
     import auth_pb2_grpc
+    import messaging_pb2
+    import messaging_pb2_grpc
 
-__all__ = ['auth_pb2', 'auth_pb2_grpc']
+__all__ = ['auth_pb2', 'auth_pb2_grpc', 'messaging_pb2', 'messaging_pb2_grpc']

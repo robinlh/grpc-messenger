@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta
 
 import grpc
@@ -11,6 +12,8 @@ JWT_SECRET = "some-secret-key"  # use env variable
 JWT_ALGORITHM = "HS256"
 TOKEN_EXPIRY_HOURS = 24
 
+logger = logging.getLogger(__name__)
+
 class AuthService(auth_pb2_grpc.AuthServiceServicer):
 
     def Login(self, request, context):
@@ -20,6 +23,7 @@ class AuthService(auth_pb2_grpc.AuthServiceServicer):
             user = db.query(User).filter(User.username == request.username).first()
             
             if not user:
+                logger.info(f"Login failed: user not found - username: {request.username}")
                 return auth_pb2.LoginResponse(
                     success=False,
                     token="",
@@ -30,6 +34,7 @@ class AuthService(auth_pb2_grpc.AuthServiceServicer):
             
             # Simple password check (in production, use proper password hashing)
             if user.password_hash != request.password:
+                logger.info(f"Login failed: invalid password - username: {request.username}")
                 return auth_pb2.LoginResponse(
                     success=False,
                     token="",
@@ -48,6 +53,8 @@ class AuthService(auth_pb2_grpc.AuthServiceServicer):
             
             db.close()
             
+            logger.info(f"Login successful - user_id: {user.id}, username: {user.username}")
+            
             return auth_pb2.LoginResponse(
                 success=True,
                 token=token,
@@ -57,6 +64,7 @@ class AuthService(auth_pb2_grpc.AuthServiceServicer):
             )
             
         except Exception as e:
+            logger.error(f"Login error - username: {request.username}, error: {str(e)}")
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(f"Internal server error: {str(e)}")
             return auth_pb2.LoginResponse(
@@ -71,6 +79,8 @@ class AuthService(auth_pb2_grpc.AuthServiceServicer):
         try:
             payload = jwt.decode(request.token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
             
+            logger.info(f"Token validation successful - user_id: {payload['user_id']}, username: {payload['username']}")
+            
             return auth_pb2.ValidateTokenResponse(
                 valid=True,
                 user_id=payload["user_id"],
@@ -78,18 +88,21 @@ class AuthService(auth_pb2_grpc.AuthServiceServicer):
             )
             
         except jwt.ExpiredSignatureError:
+            logger.info("Token validation failed: expired token")
             return auth_pb2.ValidateTokenResponse(
                 valid=False,
                 user_id=0,
                 username=""
             )
         except jwt.InvalidTokenError:
+            logger.info("Token validation failed: invalid token")
             return auth_pb2.ValidateTokenResponse(
                 valid=False,
                 user_id=0,
                 username=""
             )
         except Exception as e:
+            logger.error(f"Token validation error: {str(e)}")
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(f"Internal server error: {str(e)}")
             return auth_pb2.ValidateTokenResponse(

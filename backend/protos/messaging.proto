@@ -1,0 +1,77 @@
+syntax = "proto3";
+
+package messenger;
+
+service MessagingService {
+  rpc GetThreads(GetThreadsRequest) returns (GetThreadsResponse);
+  
+  rpc GetMessages(GetMessagesRequest) returns (GetMessagesResponse);
+  
+  rpc SendMessage(SendMessageRequest) returns (SendMessageResponse);
+  
+  rpc CreateThread(CreateThreadRequest) returns (CreateThreadResponse);
+}
+
+message User {
+  int32 id = 1;
+  string username = 2;
+}
+
+message Message {
+  int32 id = 1;
+  string content = 2;
+  int32 sender_id = 3;
+  string sender_username = 4;
+  int64 created_at = 5; // Unix timestamp
+}
+
+message Thread {
+  int32 id = 1;
+  string name = 2; // null for DMs
+  repeated User participants = 3;
+  Message last_message = 4;
+  int64 updated_at = 5; // Unix timestamp
+}
+
+message GetThreadsRequest {
+  string token = 1; // JWT token
+}
+
+message GetThreadsResponse {
+  repeated Thread threads = 1;
+}
+
+message GetMessagesRequest {
+  string token = 1;
+  int32 thread_id = 2;
+  int32 limit = 3; // Optional, default 50
+  int32 offset = 4; // Optional, for pagination
+}
+
+message GetMessagesResponse {
+  repeated Message messages = 1;
+}
+
+message SendMessageRequest {
+  string token = 1;
+  int32 thread_id = 2;
+  string content = 3;
+}
+
+message SendMessageResponse {
+  bool success = 1;
+  string message = 2; // Error message if failed
+  Message sent_message = 3; // The created message if successful
+}
+
+message CreateThreadRequest {
+  string token = 1;
+  repeated string participant_usernames = 2; // Users to add to thread
+  string name = 3; // Optional, for group threads
+}
+
+message CreateThreadResponse {
+  bool success = 1;
+  string message = 2;
+  Thread thread = 3; // The created thread if successful
+}
