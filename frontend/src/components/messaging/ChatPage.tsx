@@ -5,6 +5,7 @@ import { useThreads } from '../../hooks/useThreads';
 import { useMessages, useSendMessage } from '../../hooks/useMessages';
 import { ThreadList } from './ThreadList';
 import { ChatView } from './ChatView';
+import { CreateThreadModal } from './CreateThreadModal';
 import { Thread } from '../../types/messaging';
 
 const queryClient = new QueryClient();
@@ -12,6 +13,7 @@ const queryClient = new QueryClient();
 const ChatPageContent: React.FC = () => {
   const { user, logout } = useAuth();
   const [selectedThread, setSelectedThread] = useState<Thread | null>(null);
+  const [showCreateModal, setShowCreateModal] = useState(false);
   
   const { data: threads = [], isLoading: isLoadingThreads, error: threadsError } = useThreads();
   const { data: messages = [], isLoading: isLoadingMessages } = useMessages(selectedThread?.id || null);
@@ -35,8 +37,15 @@ const ChatPageContent: React.FC = () => {
   };
 
   const handleNewThread = () => {
-    // TODO: Implement new thread creation modal
-    alert('New thread creation coming soon!');
+    setShowCreateModal(true);
+  };
+
+  const handleThreadCreated = (threadId: number) => {
+    // Find and select the newly created thread
+    const newThread = threads.find(thread => thread.id === threadId);
+    if (newThread) {
+      setSelectedThread(newThread);
+    }
   };
 
   if (threadsError) {
@@ -116,6 +125,13 @@ const ChatPageContent: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Create Thread Modal */}
+      <CreateThreadModal
+        isOpen={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        onThreadCreated={handleThreadCreated}
+      />
     </div>
   );
 };
