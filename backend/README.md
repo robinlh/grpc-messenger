@@ -233,3 +233,5 @@ messenger.MessagingService/SendMessage
 
 - stream messages and broadcast messages
 - something iffy here but will come back to it
+- changed from bidirectional streaming to server streaming only
+- added Dockerfile so we can spin up full stack with docker-compose

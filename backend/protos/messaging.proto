@@ -11,7 +11,10 @@ service MessagingService {
   
   rpc CreateThread(CreateThreadRequest) returns (CreateThreadResponse);
   
-  rpc StreamMessages(stream StreamMessageRequest) returns (stream StreamMessageResponse);
+  rpc JoinThread(JoinThreadRequest) returns (JoinThreadResponse);
+  rpc LeaveThread(LeaveThreadRequest) returns (LeaveThreadResponse);
+  
+  rpc StreamThreadMessages(StreamThreadMessagesRequest) returns (stream MessageStreamResponse);
 }
 
 message User {
@@ -78,25 +81,40 @@ message CreateThreadResponse {
   Thread thread = 3; // The created thread if successful
 }
 
-message StreamMessageRequest {
-  oneof request {
-    JoinStream join = 1;
-    LeaveStream leave = 2;
-  }
-}
-
-message JoinStream {
+message JoinThreadRequest {
   string token = 1;
   int32 thread_id = 2;
 }
 
-message LeaveStream {
-  int32 thread_id = 1;
+message JoinThreadResponse {
+  bool success = 1;
+  string message = 2;
 }
 
-message StreamMessageResponse {
+message LeaveThreadRequest {
+  string token = 1;
+  int32 thread_id = 2;
+}
+
+message LeaveThreadResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message StreamThreadMessagesRequest {
+  string token = 1;
+  int32 thread_id = 2;
+}
+
+message MessageStreamResponse {
   oneof response {
     Message new_message = 1;
     string error = 2;
+    ConnectionStatus status = 3;
   }
+}
+
+message ConnectionStatus {
+  bool connected = 1;
+  string message = 2;
 }
