@@ -9,7 +9,7 @@ venv/
 .venv/
 ENV/
 
-# Generated gRPC code
+# Generated gRPC code (run proto generation locally for development)
 backend/messenger/generated/*.py
 !backend/messenger/generated/__init__.py
 

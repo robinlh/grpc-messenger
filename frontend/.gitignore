@@ -11,6 +11,9 @@
 # production
 /build
 
+# generated gRPC code (run proto generation locally for development)
+/src/generated/
+
 # misc
 .DS_Store
 .env.local

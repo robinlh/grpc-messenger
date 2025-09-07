@@ -1,6 +1,8 @@
 import logging
-from datetime import datetime, timedelta
+import os
+from datetime import datetime, timedelta, UTC
 
+import bcrypt
 import grpc
 import jwt
 
@@ -8,7 +10,8 @@ from messenger.generated import auth_pb2, auth_pb2_grpc
 from messenger.config.database import get_db_session
 from messenger.models.user import User
 
-JWT_SECRET = "some-secret-key"  # use env variable
+# would replace these with actual env variables for production
+JWT_SECRET = os.getenv("JWT_SECRET", "some-secret-key")
 JWT_ALGORITHM = "HS256"
 TOKEN_EXPIRY_HOURS = 24
 
@@ -32,8 +35,8 @@ class AuthService(auth_pb2_grpc.AuthServiceServicer):
                     username=""
                 )
             
-            # Simple password check (in production, use proper password hashing)
-            if user.password_hash != request.password:
+            # Verify password using bcrypt
+            if not bcrypt.checkpw(request.password.encode('utf-8'), user.password_hash.encode('utf-8')):
                 logger.info(f"Login failed: invalid password - username: {request.username}")
                 return auth_pb2.LoginResponse(
                     success=False,
@@ -47,7 +50,7 @@ class AuthService(auth_pb2_grpc.AuthServiceServicer):
             payload = {
                 "user_id": user.id,
                 "username": user.username,
-                "exp": datetime.utcnow() + timedelta(hours=TOKEN_EXPIRY_HOURS)
+                "exp": datetime.now(UTC) + timedelta(hours=TOKEN_EXPIRY_HOURS)
             }
             token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
             

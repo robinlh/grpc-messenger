@@ -3,6 +3,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
 
+# would replace this with an actual env variable for production
 DATABASE_URL = os.getenv(
     "DATABASE_URL", 
     "postgresql://postgres:password@localhost:5432/messenger"

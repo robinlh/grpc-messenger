@@ -150,7 +150,7 @@ export const CreateThreadModal: React.FC<CreateThreadModalProps> = ({
             <p className="text-xs text-gray-500 mt-1">
               {threadType === 'dm' 
                 ? 'Enter the username of the person you want to message'
-                : 'Separate multiple usernames with commas (e.g., alice, bob, charlie)'
+                : 'Separate multiple usernames with commas (e.g., jacob, jakob, joachim)'
               }
             </p>
           </div>

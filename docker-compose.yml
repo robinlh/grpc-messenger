@@ -1,5 +1,4 @@
 services:
-  # PostgreSQL Database
   postgres:
     image: postgres:15
     environment:
@@ -16,11 +15,10 @@ services:
       timeout: 5s
       retries: 5
 
-  # Python gRPC Backend
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     environment:
       DATABASE_URL: postgresql://postgres:password@postgres:5432/messenger
     ports:
@@ -34,7 +32,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # Envoy Proxy (gRPC-Web bridge)
   envoy:
     image: envoyproxy/envoy:v1.24-latest
     ports:
@@ -46,11 +43,10 @@ services:
       backend:
         condition: service_healthy
 
-  # React Frontend
   frontend:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: frontend/Dockerfile
     ports:
       - "3000:80"
     depends_on:

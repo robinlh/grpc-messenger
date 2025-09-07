@@ -8,11 +8,11 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/* \
     && pip install uv
 
-COPY pyproject.toml .
+COPY backend/pyproject.toml .
 
 RUN uv pip install --system -r pyproject.toml
 
-COPY . .
+COPY backend .
 
 EXPOSE 50051
 
