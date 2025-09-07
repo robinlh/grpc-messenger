@@ -4,6 +4,7 @@ from datetime import datetime
 import grpc
 import jwt
 from sqlalchemy.orm import joinedload
+from sqlalchemy import func
 
 from messenger.generated import messaging_pb2, messaging_pb2_grpc
 from messenger.config.database import get_db_session
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 class MessagingService(messaging_pb2_grpc.MessagingServiceServicer):
     def __init__(self):
-        # Thread ID -> list of response iterators for connected clients
+        # Thread ID -> list of (user_id, response_queue) tuples for connected clients
         self.subscribers = {}
         self.lock = threading.Lock()
 
@@ -72,6 +73,20 @@ class MessagingService(messaging_pb2_grpc.MessagingServiceServicer):
             sender_username=sender_username,
             created_at=int(message.created_at.timestamp())
         )
+    
+    def _find_existing_dm_thread(self, db, user_id_1, user_id_2):
+        return db.query(Thread).join(ThreadParticipant).filter(
+            Thread.name.is_(None)
+        ).group_by(Thread.id).having(
+            func.count(ThreadParticipant.user_id) == 2
+        ).filter(
+            Thread.id.in_(
+                db.query(ThreadParticipant.thread_id)
+                .filter(ThreadParticipant.user_id.in_([user_id_1, user_id_2]))
+                .group_by(ThreadParticipant.thread_id)
+                .having(func.count(ThreadParticipant.user_id) == 2)
+            )
+        ).first()
     
     def GetThreads(self, request, context):
         user_id = self._validate_token(request.token)
@@ -197,8 +212,8 @@ class MessagingService(messaging_pb2_grpc.MessagingServiceServicer):
             
             db.close()
             
-            # Broadcast to streaming clients
-            self._broadcast_message(request.thread_id, message_proto)
+            # Broadcast to streaming clients (exclude sender)
+            self._broadcast_message(request.thread_id, message_proto, exclude_sender_id=user_id)
             
             logger.info(f"SendMessage successful - user_id: {user_id}, thread_id: {request.thread_id}, message_id: {new_message.id}, content_length: {len(request.content)}")
             return messaging_pb2.SendMessageResponse(
@@ -241,6 +256,23 @@ class MessagingService(messaging_pb2_grpc.MessagingServiceServicer):
             current_user = db.query(User).filter(User.id == user_id).first()
             if current_user not in participant_users:
                 participant_users.append(current_user)
+            
+            is_dm = len(participant_users) == 2 and not request.name
+            
+            if is_dm:
+                user_ids = sorted([user.id for user in participant_users])
+                existing_thread = self._find_existing_dm_thread(db, user_ids[0], user_ids[1])
+                
+                if existing_thread:
+                    thread_proto = self._thread_to_proto(existing_thread, db)
+                    db.close()
+                    
+                    logger.info(f"CreateThread found existing DM - user_id: {user_id}, thread_id: {existing_thread.id}, participants: {[u.username for u in participant_users]}")
+                    return messaging_pb2.CreateThreadResponse(
+                        success=True,
+                        message="Found existing conversation",
+                        thread=thread_proto
+                    )
             
             new_thread = Thread(name=request.name if request.name else None)
             db.add(new_thread)
@@ -363,7 +395,7 @@ class MessagingService(messaging_pb2_grpc.MessagingServiceServicer):
             with self.lock:
                 if thread_id not in self.subscribers:
                     self.subscribers[thread_id] = []
-                self.subscribers[thread_id].append(response_queue)
+                self.subscribers[thread_id].append((user_id, response_queue))
             
             yield messaging_pb2.MessageStreamResponse(
                 status=messaging_pb2.ConnectionStatus(connected=True, message="Connected to thread stream")
@@ -383,15 +415,15 @@ class MessagingService(messaging_pb2_grpc.MessagingServiceServicer):
                         break
             
             finally:
-                # Remove this client from subscribers
                 with self.lock:
                     if thread_id in self.subscribers:
-                        try:
-                            self.subscribers[thread_id].remove(response_queue)
-                            if not self.subscribers[thread_id]:
-                                del self.subscribers[thread_id]
-                        except ValueError:
-                            pass  # Already removed
+                        # Remove the (user_id, response_queue) tuple
+                        self.subscribers[thread_id] = [
+                            (uid, queue) for uid, queue in self.subscribers[thread_id] 
+                            if queue != response_queue
+                        ]
+                        if not self.subscribers[thread_id]:
+                            del self.subscribers[thread_id]
                 
                 logger.info(f"StreamThreadMessages ended - user_id: {user_id}, thread_id: {thread_id}")
         
@@ -399,16 +431,21 @@ class MessagingService(messaging_pb2_grpc.MessagingServiceServicer):
             logger.error(f"StreamThreadMessages error - user_id: {user_id}, thread_id: {request.thread_id}, error: {str(e)}")
             yield messaging_pb2.MessageStreamResponse(error=f"Internal server error: {str(e)}")
     
-    def _broadcast_message(self, thread_id, message_proto):
+    def _broadcast_message(self, thread_id, message_proto, exclude_sender_id=None):
         with self.lock:
             if thread_id in self.subscribers:
                 response = messaging_pb2.MessageStreamResponse(new_message=message_proto)
                 
                 active_subscribers = []
-                for subscriber in self.subscribers[thread_id]:
+                for user_id, subscriber_queue in self.subscribers[thread_id]:
+                    # don't send to sender
+                    if exclude_sender_id and user_id == exclude_sender_id:
+                        active_subscribers.append((user_id, subscriber_queue))
+                        continue
+                        
                     try:
-                        subscriber.put(response)
-                        active_subscribers.append(subscriber)
+                        subscriber_queue.put(response)
+                        active_subscribers.append((user_id, subscriber_queue))
                     except:
                         logger.info(f"Removed disconnected subscriber from thread {thread_id}")
                 
