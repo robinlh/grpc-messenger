@@ -1,5 +1,4 @@
 import logging
-import os
 from datetime import datetime, timedelta, UTC
 
 import bcrypt
@@ -7,12 +6,10 @@ import grpc
 import jwt
 
 from messenger.generated import auth_pb2, auth_pb2_grpc
-from messenger.config.database import get_db_session
 from messenger.models.user import User
+from messenger.utils.auth import JWT_SECRET, JWT_ALGORITHM, validate_jwt_token
+from messenger.config.database import get_db_session
 
-# would replace these with actual env variables for production
-JWT_SECRET = os.getenv("JWT_SECRET", "some-secret-key")
-JWT_ALGORITHM = "HS256"
 TOKEN_EXPIRY_HOURS = 24
 
 logger = logging.getLogger(__name__)
@@ -79,35 +76,17 @@ class AuthService(auth_pb2_grpc.AuthServiceServicer):
             )
     
     def ValidateToken(self, request, context):
-        try:
-            payload = jwt.decode(request.token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-            
-            logger.info(f"Token validation successful - user_id: {payload['user_id']}, username: {payload['username']}")
-            
+        user_info = validate_jwt_token(request.token, context)
+        
+        if user_info:
+            logger.info(f"Token validation successful - user_id: {user_info['user_id']}, username: {user_info['username']}")
             return auth_pb2.ValidateTokenResponse(
                 valid=True,
-                user_id=payload["user_id"],
-                username=payload["username"]
+                user_id=user_info["user_id"],
+                username=user_info["username"]
             )
-            
-        except jwt.ExpiredSignatureError:
-            logger.info("Token validation failed: expired token")
-            return auth_pb2.ValidateTokenResponse(
-                valid=False,
-                user_id=0,
-                username=""
-            )
-        except jwt.InvalidTokenError:
-            logger.info("Token validation failed: invalid token")
-            return auth_pb2.ValidateTokenResponse(
-                valid=False,
-                user_id=0,
-                username=""
-            )
-        except Exception as e:
-            logger.error(f"Token validation error: {str(e)}")
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Internal server error: {str(e)}")
+        else:
+            logger.info("Token validation failed")
             return auth_pb2.ValidateTokenResponse(
                 valid=False,
                 user_id=0,

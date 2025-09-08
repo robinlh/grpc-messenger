@@ -1,20 +1,16 @@
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, UTC
 import grpc
-import jwt
-from sqlalchemy.orm import joinedload
 from sqlalchemy import func
+from sqlalchemy.orm import joinedload
 
 from messenger.generated import messaging_pb2, messaging_pb2_grpc
-from messenger.config.database import get_db_session
 from messenger.models.user import User
 from messenger.models.thread import Thread, ThreadParticipant
 from messenger.models.message import Message
-
-# do this here for now, match auth_service.py
-JWT_SECRET = "some-secret-key"
-JWT_ALGORITHM = "HS256"
+from messenger.utils.auth import validate_jwt_token
+from messenger.config.database import get_db_session
 
 logger = logging.getLogger(__name__)
 
@@ -23,16 +19,8 @@ class MessagingService(messaging_pb2_grpc.MessagingServiceServicer):
         # Thread ID -> list of (user_id, response_queue) tuples for connected clients
         self.subscribers = {}
         self.lock = threading.Lock()
-
-    def _validate_token(self, token):
-        try:
-            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-            return payload.get("user_id")
-        except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
-            return None
     
     def _thread_to_proto(self, thread, db):
-        # participants
         participants = db.query(User).join(ThreadParticipant).filter(
             ThreadParticipant.thread_id == thread.id
         ).all()
@@ -89,12 +77,12 @@ class MessagingService(messaging_pb2_grpc.MessagingServiceServicer):
         ).first()
     
     def GetThreads(self, request, context):
-        user_id = self._validate_token(request.token)
-        if not user_id:
+        user_info = validate_jwt_token(request.token, context)
+        if not user_info:
             logger.info("GetThreads failed: invalid or expired token")
-            context.set_code(grpc.StatusCode.UNAUTHENTICATED)
-            context.set_details("Invalid or expired token")
             return messaging_pb2.GetThreadsResponse()
+        
+        user_id = user_info['user_id']
         
         try:
             db = get_db_session()
@@ -120,12 +108,12 @@ class MessagingService(messaging_pb2_grpc.MessagingServiceServicer):
             return messaging_pb2.GetThreadsResponse()
     
     def GetMessages(self, request, context):
-        user_id = self._validate_token(request.token)
-        if not user_id:
+        user_info = validate_jwt_token(request.token, context)
+        if not user_info:
             logger.info(f"GetMessages failed: invalid or expired token - thread_id: {request.thread_id}")
-            context.set_code(grpc.StatusCode.UNAUTHENTICATED)
-            context.set_details("Invalid or expired token")
             return messaging_pb2.GetMessagesResponse()
+        
+        user_id = user_info['user_id']
         
         try:
             db = get_db_session()
@@ -144,16 +132,18 @@ class MessagingService(messaging_pb2_grpc.MessagingServiceServicer):
             limit = request.limit if request.limit > 0 else 50
             offset = request.offset if request.offset > 0 else 0
             
-            messages = db.query(Message).filter(
+            # eager loading
+            messages = db.query(Message).options(
+                joinedload(Message.sender)
+            ).filter(
                 Message.thread_id == request.thread_id
             ).order_by(Message.created_at.desc()).limit(limit).offset(offset).all()
             
             message_protos = []
             for message in messages:
-                sender = db.query(User).filter(User.id == message.sender_id).first()
                 message_proto = self._message_to_proto(
                     message, 
-                    sender.username if sender else "Unknown"
+                    message.sender.username if message.sender else "Unknown"
                 )
                 message_protos.append(message_proto)
             
@@ -169,12 +159,12 @@ class MessagingService(messaging_pb2_grpc.MessagingServiceServicer):
             return messaging_pb2.GetMessagesResponse()
     
     def SendMessage(self, request, context):
-        user_id = self._validate_token(request.token)
-        if not user_id:
+        user_info = validate_jwt_token(request.token, context)
+        if not user_info:
             logger.info(f"SendMessage failed: invalid or expired token - thread_id: {request.thread_id}")
-            context.set_code(grpc.StatusCode.UNAUTHENTICATED)
-            context.set_details("Invalid or expired token")
             return messaging_pb2.SendMessageResponse(success=False, message="Invalid token")
+        
+        user_id = user_info['user_id']
         
         try:
             db = get_db_session()
@@ -200,7 +190,7 @@ class MessagingService(messaging_pb2_grpc.MessagingServiceServicer):
             
             thread = db.query(Thread).filter(Thread.id == request.thread_id).first()
             if thread:
-                thread.updated_at = datetime.utcnow()
+                thread.updated_at = datetime.now(UTC)
             
             db.commit()
             
@@ -232,16 +222,16 @@ class MessagingService(messaging_pb2_grpc.MessagingServiceServicer):
             )
     
     def CreateThread(self, request, context):
-        user_id = self._validate_token(request.token)
-        if not user_id:
+        user_info = validate_jwt_token(request.token, context)
+        if not user_info:
             logger.info(f"CreateThread failed: invalid or expired token - participants: {request.participant_usernames}")
-            context.set_code(grpc.StatusCode.UNAUTHENTICATED)
-            context.set_details("Invalid or expired token")
             return messaging_pb2.CreateThreadResponse(success=False, message="Invalid token")
+        
+        user_id = user_info['user_id']
         
         try:
             db = get_db_session()
-            
+
             participant_users = db.query(User).filter(
                 User.username.in_(request.participant_usernames)
             ).all()
@@ -266,7 +256,7 @@ class MessagingService(messaging_pb2_grpc.MessagingServiceServicer):
                 if existing_thread:
                     thread_proto = self._thread_to_proto(existing_thread, db)
                     db.close()
-                    
+
                     logger.info(f"CreateThread found existing DM - user_id: {user_id}, thread_id: {existing_thread.id}, participants: {[u.username for u in participant_users]}")
                     return messaging_pb2.CreateThreadResponse(
                         success=True,
@@ -308,16 +298,16 @@ class MessagingService(messaging_pb2_grpc.MessagingServiceServicer):
             )
     
     def JoinThread(self, request, context):
-        user_id = self._validate_token(request.token)
-        if not user_id:
+        user_info = validate_jwt_token(request.token, context)
+        if not user_info:
             logger.info(f"JoinThread failed: invalid or expired token - thread_id: {request.thread_id}")
-            context.set_code(grpc.StatusCode.UNAUTHENTICATED)
-            context.set_details("Invalid or expired token")
             return messaging_pb2.JoinThreadResponse(success=False, message="Invalid token")
+        
+        user_id = user_info['user_id']
         
         try:
             db = get_db_session()
-            
+
             # Check if user is a participant in this thread
             participant = db.query(ThreadParticipant).filter(
                 ThreadParticipant.user_id == user_id,
@@ -350,13 +340,12 @@ class MessagingService(messaging_pb2_grpc.MessagingServiceServicer):
             )
     
     def LeaveThread(self, request, context):
-        user_id = self._validate_token(request.token)
-        if not user_id:
+        user_info = validate_jwt_token(request.token, context)
+        if not user_info:
             logger.info(f"LeaveThread failed: invalid or expired token - thread_id: {request.thread_id}")
-            context.set_code(grpc.StatusCode.UNAUTHENTICATED)
-            context.set_details("Invalid or expired token")
             return messaging_pb2.LeaveThreadResponse(success=False, message="Invalid token")
         
+        user_id = user_info['user_id']
         logger.info(f"LeaveThread successful - user_id: {user_id}, thread_id: {request.thread_id}")
         return messaging_pb2.LeaveThreadResponse(
             success=True,
@@ -366,12 +355,12 @@ class MessagingService(messaging_pb2_grpc.MessagingServiceServicer):
     def StreamThreadMessages(self, request, context):
         import queue
         
-        user_id = self._validate_token(request.token)
-        if not user_id:
+        user_info = validate_jwt_token(request.token, context)
+        if not user_info:
             logger.info(f"StreamThreadMessages failed: invalid or expired token - thread_id: {request.thread_id}")
-            context.set_code(grpc.StatusCode.UNAUTHENTICATED)
-            context.set_details("Invalid or expired token")
             return
+        
+        user_id = user_info['user_id']
         
         try:
             db = get_db_session()
