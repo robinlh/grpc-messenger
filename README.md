@@ -1,10 +1,6 @@
-# Legora Messenger
+# Grpc Messenger
 
 A real-time messaging application built with Python gRPC backend and React frontend.
-
-## Disclaimer
-
-In the interest of transparency I'd like to highlight that I'm predominanatly a backend engineer and although I understand how things work on the frontend, this UI was developed with input from ChatGPT. 
 
 ## Architecture
 
